@@ -14,6 +14,14 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 INSTALL_DIR = "/opt/cf-ip-speed"
+
+# 检测飞牛系统
+import glob as _glob
+if not os.path.exists(INSTALL_DIR):
+    if os.path.isdir("/vol1/docker"):
+        INSTALL_DIR = "/vol1/docker/cf-ip-speed"
+    elif os.path.isdir("/vol1"):
+        INSTALL_DIR = "/vol1/cf-ip-speed"
 CONFIG_FILE = f"{INSTALL_DIR}/config"
 LOG_FILE = f"{INSTALL_DIR}/cf-ip-speed.log"
 CFST_LOG = f"{INSTALL_DIR}/cfst.log"
@@ -451,7 +459,7 @@ function refresh() {
 }
 
 function cronExplain(expr) {
-  const parts = expr.split(/\s+/);
+  const parts = expr.split(/\\s+/);
   if (parts.length < 5) return '';
   const [min, hour, dom, mon, dow] = parts;
   let desc = '';
