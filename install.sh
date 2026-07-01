@@ -84,7 +84,7 @@ download() {
 json_escape() {
     # 使用 python3 处理 JSON 转义，兼容中文等多字节字符
     if has_cmd python3; then
-        python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip())[1:-1])"
+        python3 -c 'import sys,json; print(json.dumps(sys.stdin.read().strip(), ensure_ascii=False)[1:-1])'
     else
         sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r'
     fi
@@ -645,7 +645,7 @@ Cloudflare IP 优选助手 - Linux 通用版
   cf-ip-speed <命令> [参数]
 
 命令:
-  install           完整安装（安装cfst + 注册设备 + 设置定时任务）
+  install           完整安装（安装cfst + 设置定时任务 + Web面板）
   register          注册/重新注册设备
   run               立即运行一次测速并上传
   cron [表达式]     设置定时任务（默认: 每天凌晨3点）
@@ -704,9 +704,6 @@ do_install() {
     fi
     save_config
 
-    # 注册设备
-    register_device
-
     # 设置定时任务
     setup_cron "0 3 * * *"
 
@@ -718,14 +715,14 @@ do_install() {
     info "安装完成!"
     info "========================================="
     info ""
-    info "常用命令:"
-    info "  $0 run        # 立即测速"
-    info "  $0 web start  # 启动 Web 面板"
-    info "  $0 status     # 查看状态"
-    info "  $0 logs       # 查看日志"
+    info "下一步:"
+    info "  1. 启动 Web 面板:  cf-ip-speed web start"
+    info "  2. 打开浏览器访问: http://你的IP:8899"
+    info "  3. 在 Web 面板中填写昵称并注册设备"
+    info "  4. 点击「立即测速」开始"
     info ""
-    info "定时任务: 每天凌晨 3 点自动测速"
-    info "可修改: $0 cron '0 3,15 * * *'"
+    info "或命令行注册:"
+    info "  cf-ip-speed register"
     info "========================================="
 }
 
