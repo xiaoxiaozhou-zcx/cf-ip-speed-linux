@@ -507,17 +507,15 @@ install_web() {
         fi
     fi
 
-    # 复制 web.py
-    if [ -f "${INSTALL_DIR}/web.py" ]; then
-        info "web.py 已存在，更新中..."
+    # 下载 web.py
+    local web_py_url="https://raw.githubusercontent.com/xiaoxiaozhou-zcx/cf-ip-speed-linux/main/web.py"
+    if [ ! -f "${WEB_PY}" ] || [ "${FORCE_WEB:-0}" = "1" ]; then
+        info "下载 web.py..."
+        download "${web_py_url}" "${WEB_PY}"
+        chmod 755 "${WEB_PY}"
+    else
+        info "web.py 已存在，跳过下载 (使用 FORCE_WEB=1 强制更新)"
     fi
-    # 如果是从仓库运行，web.py 应该已经在同目录
-    local script_dir
-    script_dir="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-    if [ -f "${script_dir}/web.py" ]; then
-        cp "${script_dir}/web.py" "${WEB_PY}"
-    fi
-    chmod 755 "${WEB_PY}"
 
     # 创建 systemd 服务
     if has_cmd systemctl; then
@@ -788,5 +786,28 @@ main() {
             ;;
     esac
 }
+
+# ==================== 自安装 ====================
+
+self_install() {
+    local script_src
+    script_src="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+    mkdir -p "$INSTALL_DIR"
+    if [ "$script_src" != "${INSTALL_DIR}/cf-ip-speed.sh" ]; then
+        cp "$script_src" "${INSTALL_DIR}/cf-ip-speed.sh"
+        chmod 755 "${INSTALL_DIR}/cf-ip-speed.sh"
+        # 创建全局命令链接
+        if [ -d /usr/local/bin ]; then
+            ln -sf "${INSTALL_DIR}/cf-ip-speed.sh" /usr/local/bin/cf-ip-speed
+        fi
+    fi
+}
+
+# 无参数时执行完整安装
+if [ $# -eq 0 ]; then
+    self_install
+    do_install
+    exit 0
+fi
 
 main "$@"
