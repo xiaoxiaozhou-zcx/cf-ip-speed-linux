@@ -460,6 +460,9 @@ show_status() {
     echo "定时任务:"
     crontab -l 2>/dev/null | grep "cf-ip-speed" || echo "  未设置"
     echo "------------------------------------------"
+    echo "Web 面板:"
+    web_status 2>/dev/null || echo "  未安装"
+    echo "------------------------------------------"
     if [ -f "$LOG_FILE" ]; then
         echo "最近上传记录:"
         tail -5 "$LOG_FILE"
@@ -482,6 +485,131 @@ show_logs() {
     fi
 }
 
+# ==================== Web 面板 ====================
+
+WEB_PORT="${WEB_PORT:-8899}"
+WEB_PID_FILE="${INSTALL_DIR}/web.pid"
+WEB_PY="${INSTALL_DIR}/web.py"
+
+install_web() {
+    info "安装 Web 管理面板..."
+    # 检查 Python3
+    if ! has_cmd python3; then
+        warn "未找到 python3，尝试安装..."
+        if has_cmd apt-get; then
+            apt-get update -qq && apt-get install -y -qq python3
+        elif has_cmd yum; then
+            yum install -y -q python3
+        elif has_cmd apk; then
+            apk add --no-cache python3
+        else
+            fail "无法自动安装 python3，请手动安装"
+        fi
+    fi
+
+    # 复制 web.py
+    if [ -f "${INSTALL_DIR}/web.py" ]; then
+        info "web.py 已存在，更新中..."
+    fi
+    # 如果是从仓库运行，web.py 应该已经在同目录
+    local script_dir
+    script_dir="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+    if [ -f "${script_dir}/web.py" ]; then
+        cp "${script_dir}/web.py" "${WEB_PY}"
+    fi
+    chmod 755 "${WEB_PY}"
+
+    # 创建 systemd 服务
+    if has_cmd systemctl; then
+        cat > /etc/systemd/system/cf-ip-speed-web.service <<SVCEOF
+[Unit]
+Description=Cloudflare IP Speed Panel Web UI
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=$(command -v python3) ${WEB_PY} --host 0.0.0.0 --port ${WEB_PORT}
+WorkingDirectory=${INSTALL_DIR}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+        systemctl daemon-reload
+        systemctl enable cf-ip-speed-web.service 2>/dev/null || true
+        info "systemd 服务已创建: cf-ip-speed-web"
+    fi
+
+    info "Web 面板安装完成"
+}
+
+web_start() {
+    if [ -f "$WEB_PID_FILE" ]; then
+        local pid
+        pid="$(cat "$WEB_PID_FILE" 2>/dev/null)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            warn "Web 面板已在运行 (PID: $pid)"
+            return 0
+        fi
+        rm -f "$WEB_PID_FILE"
+    fi
+
+    if has_cmd systemctl && systemctl is-active cf-ip-speed-web >/dev/null 2>&1; then
+        warn "Web 面板 systemd 服务已在运行"
+        return 0
+    fi
+
+    if has_cmd systemctl; then
+        systemctl start cf-ip-speed-web.service
+        info "Web 面板已启动 (systemd)"
+    else
+        nohup python3 "${WEB_PY}" --host 0.0.0.0 --port "${WEB_PORT}" > "${INSTALL_DIR}/web.log" 2>&1 &
+        echo $! > "$WEB_PID_FILE"
+        info "Web 面板已启动 (PID: $!, 端口: ${WEB_PORT})"
+    fi
+
+    info "访问: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):${WEB_PORT}"
+}
+
+web_stop() {
+    if has_cmd systemctl && systemctl is-active cf-ip-speed-web >/dev/null 2>&1; then
+        systemctl stop cf-ip-speed-web.service
+        info "Web 面板已停止 (systemd)"
+        return 0
+    fi
+
+    if [ -f "$WEB_PID_FILE" ]; then
+        local pid
+        pid="$(cat "$WEB_PID_FILE" 2>/dev/null)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"
+            info "Web 面板已停止 (PID: $pid)"
+        fi
+        rm -f "$WEB_PID_FILE"
+    else
+        warn "Web 面板未在运行"
+    fi
+}
+
+web_status() {
+    if has_cmd systemctl && systemctl is-active cf-ip-speed-web >/dev/null 2>&1; then
+        info "Web 面板运行中 (systemd)"
+        info "访问: http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost'):${WEB_PORT}"
+        return 0
+    fi
+
+    if [ -f "$WEB_PID_FILE" ]; then
+        local pid
+        pid="$(cat "$WEB_PID_FILE" 2>/dev/null)"
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            info "Web 面板运行中 (PID: $pid, 端口: ${WEB_PORT})"
+            return 0
+        fi
+    fi
+    info "Web 面板未运行"
+}
+
 # ==================== 帮助信息 ====================
 
 show_help() {
@@ -498,6 +626,7 @@ Cloudflare IP 优选助手 - Linux 通用版
   run               立即运行一次测速并上传
   cron [表达式]     设置定时任务（默认: 每天凌晨3点）
   cron-remove       移除定时任务
+  web [start|stop|status|install]  Web 管理面板
   status            查看当前状态
   logs              查看日志
   config            编辑配置文件
@@ -508,6 +637,7 @@ Cloudflare IP 优选助手 - Linux 通用版
 示例:
   cf-ip-speed install              # 一键安装
   cf-ip-speed run                  # 立即测速
+  cf-ip-speed web start            # 启动 Web 面板
   cf-ip-speed cron "0 3,15 * * *"  # 每天3点和15点测速
   cf-ip-speed status               # 查看状态
 
@@ -556,6 +686,9 @@ do_install() {
     # 设置定时任务
     setup_cron "0 3 * * *"
 
+    # 安装 Web 面板
+    install_web
+
     echo ""
     info "========================================="
     info "安装完成!"
@@ -563,6 +696,7 @@ do_install() {
     info ""
     info "常用命令:"
     info "  $0 run        # 立即测速"
+    info "  $0 web start  # 启动 Web 面板"
     info "  $0 status     # 查看状态"
     info "  $0 logs       # 查看日志"
     info ""
@@ -575,6 +709,15 @@ do_install() {
 
 do_uninstall() {
     info "开始卸载..."
+
+    # 停止 Web 面板
+    web_stop 2>/dev/null || true
+    if has_cmd systemctl; then
+        systemctl disable cf-ip-speed-web.service 2>/dev/null || true
+        rm -f /etc/systemd/system/cf-ip-speed-web.service
+        systemctl daemon-reload 2>/dev/null || true
+        info "已移除 Web 面板服务"
+    fi
 
     # 移除定时任务
     remove_cron
@@ -611,6 +754,17 @@ main() {
             ;;
         cron-remove)
             remove_cron
+            ;;
+        web)
+            local web_cmd="${1:-start}"
+            shift 2>/dev/null || true
+            case "$web_cmd" in
+                start)    web_start ;;
+                stop)     web_stop ;;
+                status)   web_status ;;
+                install)  install_web ;;
+                *)        error "未知 web 命令: $web_cmd (可用: start/stop/status/install)" ;;
+            esac
             ;;
         status)
             show_status
