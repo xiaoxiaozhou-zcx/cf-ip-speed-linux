@@ -13,6 +13,16 @@ CFST_TAG="${CFST_TAG:-v2.3.5}"
 CFST_BASE_URL="https://github.com/${CFST_REPO}/releases/download/${CFST_TAG}"
 
 INSTALL_DIR="/opt/cf-ip-speed"
+
+# 检测飞牛系统，自动调整安装路径
+if [ -d /vol1 ] && [ ! -d /opt/cf-ip-speed ]; then
+    # 飞牛系统，优先使用数据卷
+    if [ -d /vol1/docker ]; then
+        INSTALL_DIR="/vol1/docker/cf-ip-speed"
+    elif [ -d /vol1 ]; then
+        INSTALL_DIR="/vol1/cf-ip-speed"
+    fi
+fi
 CONFIG_FILE="${INSTALL_DIR}/config"
 IP_FILE="${INSTALL_DIR}/ip.txt"
 LOG_FILE="${INSTALL_DIR}/cf-ip-speed.log"
@@ -72,7 +82,12 @@ download() {
 }
 
 json_escape() {
-    sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r'
+    # 使用 python3 处理 JSON 转义，兼容中文等多字节字符
+    if has_cmd python3; then
+        python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip())[1:-1])"
+    else
+        sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\r'
+    fi
 }
 
 # ==================== 配置管理 ====================
@@ -189,10 +204,17 @@ register_device() {
     fi
 
     info "正在注册设备..."
-    local response
-    response="$(curl -fsS -X POST "${WORKER_URL}/api/public/register" \
+    local response http_code
+    response="$(curl -s -w '\n%{http_code}' -X POST "${WORKER_URL}/api/public/register" \
         -H "Content-Type: application/json" \
         -d "{\"nickname\":\"$(printf '%s' "$nickname" | json_escape)\",\"device_name\":\"$(printf '%s' "$device_name" | json_escape)\"}")"
+    local http_code
+    http_code="$(echo "$response" | tail -1)"
+    response="$(echo "$response" | sed '$d')"
+
+    if [ "$http_code" != "200" ]; then
+        fail "注册失败 (HTTP $http_code): $response"
+    fi
 
     local did dtoken
     did="$(echo "$response" | grep -o '"device_id":"[^"]*"' | head -1 | cut -d'"' -f4)"
@@ -390,13 +412,17 @@ JSON
     )
 
     info "上传测速结果到 ${WORKER_URL} ..."
-    local response
-    response="$(curl -fsS -X POST "${WORKER_URL}/api/public/upload" \
+    local response http_code
+    response="$(curl -s -w '\n%{http_code}' -X POST "${WORKER_URL}/api/public/upload" \
         -H "Content-Type: application/json" \
-        -d "$payload" 2>&1)" || {
-        error "上传失败: $response"
+        -d "$payload")"
+    http_code="$(echo "$response" | tail -1)"
+    response="$(echo "$response" | sed '$d')"
+
+    if [ "$http_code" != "200" ]; then
+        error "上传失败 (HTTP $http_code): $response"
         return 1
-    }
+    fi
 
     local success
     success="$(echo "$response" | grep -o '"success":true' || true)"
@@ -793,13 +819,19 @@ self_install() {
     local script_src
     script_src="$(readlink -f "$0" 2>/dev/null || echo "$0")"
     mkdir -p "$INSTALL_DIR"
-    if [ "$script_src" != "${INSTALL_DIR}/cf-ip-speed.sh" ]; then
+    # 判断是否从文件运行（非 bash -c 管道）
+    # 如果是管道运行，$0 会指向 bash 本身（可执行二进制，非文本脚本）
+    if [ -f "$script_src" ] && file "$script_src" 2>/dev/null | grep -qi 'text'; then
         cp "$script_src" "${INSTALL_DIR}/cf-ip-speed.sh"
-        chmod 755 "${INSTALL_DIR}/cf-ip-speed.sh"
-        # 创建全局命令链接
-        if [ -d /usr/local/bin ]; then
-            ln -sf "${INSTALL_DIR}/cf-ip-speed.sh" /usr/local/bin/cf-ip-speed
-        fi
+    else
+        # 从 curl 管道运行，从 GitHub 下载一份落盘
+        info "从 GitHub 下载脚本到 ${INSTALL_DIR}/cf-ip-speed.sh ..."
+        download "https://raw.githubusercontent.com/xiaoxiaozhou-zcx/cf-ip-speed-linux/main/install.sh" "${INSTALL_DIR}/cf-ip-speed.sh"
+    fi
+    chmod 755 "${INSTALL_DIR}/cf-ip-speed.sh"
+    # 创建全局命令链接
+    if [ -d /usr/local/bin ]; then
+        ln -sf "${INSTALL_DIR}/cf-ip-speed.sh" /usr/local/bin/cf-ip-speed
     fi
 }
 
